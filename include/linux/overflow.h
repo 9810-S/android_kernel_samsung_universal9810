@@ -216,12 +216,12 @@
  */
 static inline __must_check size_t array_size(size_t a, size_t b)
 {
-	size_t bytes;
+        size_t bytes;
 
-	if (check_mul_overflow(a, b, &bytes))
-		return SIZE_MAX;
+        if (check_mul_overflow(a, b, &bytes))
+                return SIZE_MAX;
 
-	return bytes;
+        return bytes;
 }
 
 /**
@@ -238,27 +238,58 @@ static inline __must_check size_t array_size(size_t a, size_t b)
  */
 static inline __must_check size_t array3_size(size_t a, size_t b, size_t c)
 {
-	size_t bytes;
+        size_t bytes;
 
-	if (check_mul_overflow(a, b, &bytes))
-		return SIZE_MAX;
-	if (check_mul_overflow(bytes, c, &bytes))
-		return SIZE_MAX;
+        if (check_mul_overflow(a, b, &bytes))
+                return SIZE_MAX;
+        if (check_mul_overflow(bytes, c, &bytes))
+                return SIZE_MAX;
 
-	return bytes;
+        return bytes;
 }
 
 static inline __must_check size_t __ab_c_size(size_t n, size_t size, size_t c)
 {
-	size_t bytes;
+        size_t bytes;
 
-	if (check_mul_overflow(n, size, &bytes))
-		return SIZE_MAX;
-	if (check_add_overflow(bytes, c, &bytes))
-		return SIZE_MAX;
+        if (check_mul_overflow(n, size, &bytes))
+                return SIZE_MAX;
+        if (check_add_overflow(bytes, c, &bytes))
+                return SIZE_MAX;
 
-	return bytes;
+        return bytes;
 }
+
+/** check_shl_overflow() - Calculate a left-shifted value and check overflow
+ *
+ * @a: Value to be shifted
+ * @s: How many bits left to shift
+ * @d: Pointer to where to store the result
+ *
+ * Computes *@d = (@a << @s)
+ *
+ * Returns true if '*d' cannot hold the result or when 'a << s' doesn't
+ * make sense. Example conditions:
+ * - 'a << s' causes bits to be lost when stored in *d.
+ * - 's' is garbage (e.g. negative) or so large that the result of
+ *   'a << s' is guaranteed to be 0.
+ * - 'a' is negative.
+ * - 'a << s' sets the sign bit, if any, in '*d'.
+ *
+ * '*d' will hold the results of the attempted shift, but is not
+ * considered "safe for use" if false is returned.
+ */
+#define check_shl_overflow(a, s, d) ({					\
+	typeof(a) _a = a;						\
+	typeof(s) _s = s;						\
+	typeof(d) _d = d;						\
+	u64 _a_full = _a;						\
+	unsigned int _to_shift =					\
+		_s >= 0 && _s < 8 * sizeof(*d) ? _s : 0;		\
+	*_d = (_a_full << _to_shift);					\
+	(_to_shift != _s || *_d < 0 || _a < 0 ||			\
+		(*_d >> _to_shift) != _a);				\
+})
 
 /**
  * struct_size() - Calculate size of structure with trailing array.

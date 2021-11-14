@@ -660,8 +660,6 @@ void kdp_init(void)
 }
 #endif /*CONFIG_RKP_KDP*/
 
-void __init init_sync_kmem_pool(void);
-void __init init_dma_buf_kmem_pool(void);
 asmlinkage __visible void __init start_kernel(void)
 {
 	char *command_line;
@@ -699,7 +697,7 @@ asmlinkage __visible void __init start_kernel(void)
 	smp_prepare_boot_cpu();	/* arch-specific boot-cpu hooks */
 	boot_cpu_hotplug_init();
 
-	build_all_zonelists(NULL, NULL);
+	build_all_zonelists(NULL, NULL, false);
 	page_alloc_init();
 
 #if !defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
@@ -837,7 +835,7 @@ asmlinkage __visible void __init start_kernel(void)
 #endif
 	thread_stack_cache_init();
 #ifdef CONFIG_RKP_KDP
-	if (rkp_cred_enable)
+	if (rkp_cred_enable) 
 		kdp_init();
 #endif /*CONFIG_RKP_KDP*/
 	cred_init();
@@ -856,8 +854,6 @@ asmlinkage __visible void __init start_kernel(void)
 	cgroup_init();
 	taskstats_init_early();
 	delayacct_init();
-	init_sync_kmem_pool();
-	init_dma_buf_kmem_pool();
 
 	check_bugs();
 
@@ -873,6 +869,8 @@ asmlinkage __visible void __init start_kernel(void)
 
 	/* Do the rest non-__init'ed, we're now alive */
 	rest_init();
+
+	prevent_tail_call_optimization();
 }
 
 /* Call all constructor functions linked into the kernel. */

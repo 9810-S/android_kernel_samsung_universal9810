@@ -549,10 +549,10 @@ static int xhci_plat_suspend(struct device *dev)
 
 static int xhci_plat_resume(struct device *dev)
 {
-	pr_info("[%s] \n",__func__);
+	struct usb_hcd	*hcd = dev_get_drvdata(dev);
+	struct xhci_hcd	*xhci = hcd_to_xhci(hcd);
 
-	/* return xhci_resume(xhci, 0); */
-	return 0;
+	return xhci_resume(xhci, 0);
 }
 
 static const struct dev_pm_ops xhci_plat_pm_ops = {

@@ -2254,7 +2254,6 @@ static struct file *do_sync_mmap_readahead(struct vm_area_struct *vma,
 	/*
 	 * mmap read-around
 	 */
-	fpin = maybe_unlock_mmap_for_io(vma, flags, fpin);
 #if CONFIG_MMAP_READAROUND_LIMIT == 0
 	ra_pages = ra->ra_pages;
 #else
@@ -2263,6 +2262,7 @@ static struct file *do_sync_mmap_readahead(struct vm_area_struct *vma,
 	else
 		ra_pages = ra->ra_pages;
 #endif
+	fpin = maybe_unlock_mmap_for_io(vma, flags, fpin);
 	ra->start = max_t(long, 0, offset - ra_pages / 2);
 	ra->size = ra_pages;
 	ra->async_size = ra_pages / 4;

@@ -662,7 +662,7 @@ int blk_queue_enter(struct request_queue *q, bool nowait)
 		if (nowait)
 			return -EBUSY;
 
-		wait_event_interruptible(q->mq_freeze_wq,
+		wait_event(q->mq_freeze_wq,
 			   !atomic_read(&q->mq_freeze_depth) ||
 			   blk_queue_dying(q));
 		if (blk_queue_dying(q))
@@ -732,6 +732,9 @@ struct request_queue *blk_alloc_queue_node(gfp_t gfp_mask, int node_id)
 
 	kobject_init(&q->kobj, &blk_queue_ktype);
 
+#ifdef CONFIG_BLK_DEV_IO_TRACE
+	mutex_init(&q->blk_trace_mutex);
+#endif
 	mutex_init(&q->sysfs_lock);
 	spin_lock_init(&q->__queue_lock);
 

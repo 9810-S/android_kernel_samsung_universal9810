@@ -685,6 +685,46 @@ out:
 	return ret;
 }
 
+/** The function sets the pid and the process name associated with the dns socket. **/
+static int sock_set_dns_pid(struct sock *sk, char __user *optval, int optlen)
+{
+	int ret = -EADDRNOTAVAIL;
+	struct pid *pid_struct = NULL;
+	struct task_struct *task = NULL;
+	int process_returnValue = -1;
+	char full_process_name[PROCESS_NAME_LEN_NAP] = {0};
+
+	if (optlen < 0)
+		goto out;
+
+	if (optlen == sizeof(pid_t)) {
+		pid_t dns_pid;
+		ret = -EFAULT;
+		if (copy_from_user(&dns_pid, optval, sizeof(dns_pid)))
+			goto out;
+		memcpy(&sk->knox_dns_pid, &dns_pid, sizeof(sk->knox_dns_pid));
+		if(check_ncm_flag()) {
+			pid_struct = find_get_pid(dns_pid);
+			if (pid_struct != NULL) {
+				task = pid_task(pid_struct,PIDTYPE_PID);
+				if (task != NULL) {
+					process_returnValue = get_cmdline(task, full_process_name, sizeof(full_process_name)-1);
+					if (process_returnValue > 0) {
+						memcpy(sk->dns_process_name, full_process_name, sizeof(sk->dns_process_name)-1);
+					} else {
+						memcpy(sk->dns_process_name, task->comm, sizeof(task->comm)-1);
+					}
+				}
+			}
+		}
+		ret = 0;
+	}
+
+out:
+	return ret;
+}
+
+/* END_OF_KNOX_NPA */
 
 static inline void sock_valbool_flag(struct sock *sk, int bit, int valbool)
 {
@@ -739,6 +779,9 @@ int sock_setsockopt(struct socket *sock, int level, int optname,
 		return sock_set_domain_name(sk, optval, optlen);
 	if (optname == SO_SET_DNS_UID)
 		return sock_set_dns_uid(sk, optval, optlen);
+	if (optname == SO_SET_DNS_PID)
+		return sock_set_dns_pid(sk, optval, optlen);
+	/* END_OF_KNOX_NPA */
 
 	if (optlen < sizeof(int))
 		return -EINVAL;
@@ -1083,7 +1126,6 @@ set_rcvbuf:
 }
 EXPORT_SYMBOL(sock_setsockopt);
 
-
 static void cred_to_ucred(struct pid *pid, const struct cred *cred,
 			  struct ucred *ucred)
 {
@@ -1244,7 +1286,11 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
 		struct ucred peercred;
 		if (len > sizeof(peercred))
 			len = sizeof(peercred);
+
+		spin_lock(&sk->sk_peer_lock);
 		cred_to_ucred(sk->sk_peer_pid, sk->sk_peer_cred, &peercred);
+		spin_unlock(&sk->sk_peer_lock);
+
 		if (copy_to_user(optval, &peercred, len))
 			return -EFAULT;
 		goto lenout;
@@ -1401,17 +1447,15 @@ void sock_lock_init(struct sock *sk)
 static void sock_copy(struct sock *nsk, const struct sock *osk)
 {
 #ifdef CONFIG_SECURITY_NETWORK
-	struct sk_security_struct sksec;
-	memcpy(&sksec, nsk->sk_security, sizeof(sksec));
+	void *sptr = nsk->sk_security;
 #endif
-
 	memcpy(nsk, osk, offsetof(struct sock, sk_dontcopy_begin));
 
 	memcpy(&nsk->sk_dontcopy_end, &osk->sk_dontcopy_end,
 	       osk->sk_prot->obj_size - offsetof(struct sock, sk_dontcopy_end));
 
 #ifdef CONFIG_SECURITY_NETWORK
-	memcpy(nsk->sk_security, &sksec, sizeof(sksec));
+	nsk->sk_security = sptr;
 	security_sk_clone(osk, nsk);
 #endif
 }
@@ -1498,10 +1542,63 @@ struct sock *sk_alloc(struct net *net, int family, gfp_t priority,
 {
 	struct sock *sk;
 
+	/* START_OF_KNOX_NPA */
+	struct pid *pid_struct = NULL;
+	struct task_struct *task = NULL;
+	int process_returnValue = -1;
+	char full_process_name[PROCESS_NAME_LEN_NAP] = {0};
+	struct pid *parent_pid_struct = NULL;
+	struct task_struct *parent_task = NULL;
+	int parent_returnValue = -1;
+	char full_parent_process_name[PROCESS_NAME_LEN_NAP] = {0};
+	/* END_OF_KNOX_NPA */
 
 	sk = sk_prot_alloc(prot, priority | __GFP_ZERO, family);
 	if (sk) {
 		sk->sk_family = family;
+		/* START_OF_KNOX_NPA */
+		/* assign values to members of sock structure when npa flag is present */
+		sk->knox_uid = current->cred->uid.val;
+		sk->knox_pid = current->tgid;
+		sk->knox_puid = 0;
+		sk->knox_ppid = 0;
+		sk->knox_dns_uid = 0;
+		sk->knox_dns_pid = 0;
+		memset(sk->process_name,'\0',sizeof(sk->process_name));
+		memset(sk->parent_process_name,'\0',sizeof(sk->parent_process_name));
+		memset(sk->dns_process_name,'\0',sizeof(sk->dns_process_name));
+		memset(sk->domain_name,'\0',sizeof(sk->domain_name));
+		if (check_ncm_flag()) {
+			pid_struct = find_get_pid(current->tgid);
+			if (pid_struct != NULL) {
+				task = pid_task(pid_struct, PIDTYPE_PID);
+				if (task != NULL) {
+					process_returnValue = get_cmdline(task, full_process_name, sizeof(full_process_name)-1);
+					if (process_returnValue > 0) {
+						memcpy(sk->process_name, full_process_name, sizeof(sk->process_name)-1);
+					} else {
+						memcpy(sk->process_name, task->comm, sizeof(task->comm)-1);
+					}
+					if (task->parent != NULL) {
+						parent_pid_struct = find_get_pid(task->parent->tgid);
+						if (parent_pid_struct != NULL) {
+							parent_task = pid_task(parent_pid_struct, PIDTYPE_PID);
+							if (parent_task != NULL) {
+								parent_returnValue = get_cmdline(parent_task, full_parent_process_name, sizeof(full_parent_process_name)-1);
+								if (parent_returnValue > 0) {
+									memcpy(sk->parent_process_name, full_parent_process_name, sizeof(sk->parent_process_name)-1);
+								} else {
+									memcpy(sk->parent_process_name, parent_task->comm, sizeof(parent_task->comm)-1);
+								}
+								sk->knox_puid = parent_task->cred->uid.val;
+								sk->knox_ppid = parent_task->tgid;
+							}
+						}
+					}
+				}
+			}
+		}
+		/* END_OF_KNOX_NPA */
 		/*
 		 * See comment in struct sock definition to understand
 		 * why we need sk_prot_creator -acme
@@ -1518,6 +1615,7 @@ struct sock *sk_alloc(struct net *net, int family, gfp_t priority,
 		cgroup_sk_alloc(&sk->sk_cgrp_data);
 		sock_update_classid(&sk->sk_cgrp_data);
 		sock_update_netprioidx(&sk->sk_cgrp_data);
+		sk_tx_queue_clear(sk);
         /* START_OF_KNOX_NPA */
         sk->knox_uid = current->cred->uid.val;
         sk->knox_pid = current->tgid;
@@ -1557,9 +1655,10 @@ static void __sk_destruct(struct rcu_head *head)
 		sk->sk_frag.page = NULL;
 	}
 
-	if (sk->sk_peer_cred)
-		put_cred(sk->sk_peer_cred);
+	/* We do not need to acquire sk->sk_peer_lock, we are the last user. */
+	put_cred(sk->sk_peer_cred);
 	put_pid(sk->sk_peer_pid);
+
 	if (likely(sk->sk_net_refcnt))
 		put_net(sock_net(sk));
 	sk_prot_free(sk->sk_prot_creator, sk);
@@ -1653,7 +1752,7 @@ struct sock *sk_clone_lock(const struct sock *sk, const gfp_t priority)
 		newsk->sk_userlocks	= sk->sk_userlocks & ~SOCK_BINDPORT_LOCK;
 
 		sock_reset_flag(newsk, SOCK_DONE);
-		cgroup_sk_alloc(&newsk->sk_cgrp_data);
+		cgroup_sk_clone(&newsk->sk_cgrp_data);
 #ifdef CONFIG_MPTCP
 		sock_reset_flag(newsk, SOCK_MPTCP);
 #endif
@@ -1711,6 +1810,7 @@ struct sock *sk_clone_lock(const struct sock *sk, const gfp_t priority)
 		 */
 		sk_refcnt_debug_inc(newsk);
 		sk_set_socket(newsk, NULL);
+		sk_tx_queue_clear(newsk);
 		newsk->sk_wq = NULL;
 
 		if (newsk->sk_prot->sockets_allocated)
@@ -2615,6 +2715,8 @@ void sock_init_data(struct socket *sock, struct sock *sk)
 
 	sk->sk_peer_pid 	=	NULL;
 	sk->sk_peer_cred	=	NULL;
+	spin_lock_init(&sk->sk_peer_lock);
+
 	sk->sk_write_pending	=	0;
 	sk->sk_rcvlowat		=	1;
 	sk->sk_rcvtimeo		=	MAX_SCHEDULE_TIMEOUT;

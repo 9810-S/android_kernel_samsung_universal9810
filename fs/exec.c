@@ -74,14 +74,7 @@
 
 #ifdef CONFIG_RKP_KDP
 #define rkp_is_nonroot(x) ((x->cred->type)>>1 & 1)
-#ifdef CONFIG_LOD_SEC
-#define rkp_is_lod(x) ((x->cred->type)>>3 & 1)
-#endif /*CONFIG_LOD_SEC*/
 #endif /*CONFIG_RKP_KDP*/
-
-#define HWCOMPOSER_BIN_PREFIX "/vendor/bin/hw/android.hardware.graphics.composer"
-#define MEDIAOMX_BIN_PREFIX "/vendor/bin/hw/android.hardware.media.omx"
-#define HWAUDIO_BIN_PREFIX "/vendor/bin/hw/android.hardware.audio"
 
 int suid_dumpable = 0;
 
@@ -1010,7 +1003,7 @@ int kernel_read_file_from_fd(int fd, void **buf, loff_t *size, loff_t max_size,
 	struct fd f = fdget(fd);
 	int ret = -EBADF;
 
-	if (!f.file)
+	if (!f.file || !(f.file->f_mode & FMODE_READ))
 		goto out;
 
 	ret = kernel_read_file(f.file, buf, size, max_size, id);
@@ -1037,7 +1030,7 @@ static int exec_mmap(struct mm_struct *mm)
 	/* Notify parent that we're no longer interested in the old VM */
 	tsk = current;
 	old_mm = current->mm;
-	mm_release(tsk, old_mm);
+	exec_mm_release(tsk, old_mm);
 
 	if (old_mm) {
 		sync_mm_rss(old_mm);
@@ -1278,8 +1271,8 @@ extern struct super_block *vendor_sb;	/* pointer to superblock */
 extern struct super_block *rootfs_sb;	/* pointer to superblock */
 extern int is_recovery;
 
-static int kdp_check_sb_mismatch(struct super_block *sb)
-{
+static int kdp_check_sb_mismatch(struct super_block *sb) 
+{	
 	if(is_recovery) {
 		return 0;
 	}
@@ -1289,17 +1282,17 @@ static int kdp_check_sb_mismatch(struct super_block *sb)
 	}
 	return 0;
 }
-static int invalid_drive(struct linux_binprm * bprm)
+static int invalid_drive(struct linux_binprm * bprm) 
 {
 	struct super_block *sb =  NULL;
 	struct vfsmount *vfsmnt = NULL;
-
+	
 	vfsmnt = bprm->file->f_path.mnt;
-	if(!vfsmnt ||
+	if(!vfsmnt || 
 		!rkp_ro_page((unsigned long)vfsmnt)) {
 		printk("\nInvalid Drive #%s# #%p#\n",bprm->filename, vfsmnt);
 		return 1;
-	}
+	} 
 	sb = vfsmnt->mnt_sb;
 
 	if(kdp_check_sb_mismatch(sb)) {
@@ -1351,7 +1344,7 @@ int flush_old_exec(struct linux_binprm * bprm)
 	acct_arg_size(bprm, 0);
 #ifdef CONFIG_RKP_NS_PROT
 	if(rkp_cred_enable &&
-		is_rkp_priv_task() &&
+		is_rkp_priv_task() && 
 		invalid_drive(bprm)) {
 		panic("\n KDP_NS_PROT: Illegal Execution of file #%s#\n",bprm->filename);
 	}
@@ -1473,6 +1466,7 @@ static void free_bprm(struct linux_binprm *bprm)
 	/* If a binfmt changed the interp, free it. */
 	if (bprm->interp != bprm->filename)
 		kfree(bprm->interp);
+	kfree(bprm);
 }
 
 int bprm_change_interp(char *interp, struct linux_binprm *bprm)
@@ -1798,13 +1792,8 @@ static int rkp_restrict_fork(struct filename *path)
 	    !strcmp(path->name, "/system/bin/idmap2")) {
 		return 0 ;
 	}
-        /* If the Process is from Linux on Dex,
+        /* If the Process is from Linux on Dex, 
         then no need to reduce privilege */
-#ifdef CONFIG_LOD_SEC
-	if(rkp_is_lod(current)){
-            return 0;
-        }
-#endif
 	if(rkp_is_nonroot(current)){
 		shellcred = prepare_creds();
 		if (!shellcred) {
@@ -1920,7 +1909,7 @@ static int do_execveat_common(int fd, struct filename *filename,
 			      int flags)
 {
 	char *pathbuf = NULL;
-	struct linux_binprm bprm;
+	struct linux_binprm *bprm;
 	struct file *file;
 	struct files_struct *displaced;
 	int retval;
@@ -1948,13 +1937,16 @@ static int do_execveat_common(int fd, struct filename *filename,
 	if (retval)
 		goto out_ret;
 
-	memset(&bprm, 0, sizeof(bprm));
+	retval = -ENOMEM;
+	bprm = kzalloc(sizeof(*bprm), GFP_KERNEL);
+	if (!bprm)
+		goto out_files;
 
-	retval = prepare_bprm_creds(&bprm);
+	retval = prepare_bprm_creds(bprm);
 	if (retval)
 		goto out_free;
 
-	check_unsafe_exec(&bprm);
+	check_unsafe_exec(bprm);
 	current->in_execve = 1;
 
 	file = do_open_execat(fd, filename, flags);
@@ -1972,9 +1964,9 @@ static int do_execveat_common(int fd, struct filename *filename,
 #endif
 	sched_exec();
 
-	bprm.file = file;
+	bprm->file = file;
 	if (fd == AT_FDCWD || filename->name[0] == '/') {
-		bprm.filename = filename->name;
+		bprm->filename = filename->name;
 	} else {
 		if (filename->name[0] == '\0')
 			pathbuf = kasprintf(GFP_TEMPORARY, "/dev/fd/%d", fd);
@@ -1991,71 +1983,50 @@ static int do_execveat_common(int fd, struct filename *filename,
 		 * current->files (due to unshare_files above).
 		 */
 		if (close_on_exec(fd, rcu_dereference_raw(current->files->fdt)))
-			bprm.interp_flags |= BINPRM_FLAGS_PATH_INACCESSIBLE;
-		bprm.filename = pathbuf;
+			bprm->interp_flags |= BINPRM_FLAGS_PATH_INACCESSIBLE;
+		bprm->filename = pathbuf;
 	}
-	bprm.interp = bprm.filename;
+	bprm->interp = bprm->filename;
 
-	retval = bprm_mm_init(&bprm);
+	retval = bprm_mm_init(bprm);
 	if (retval)
 		goto out_unmark;
 
-	bprm.argc = count(argv, MAX_ARG_STRINGS);
-	if ((retval = bprm.argc) < 0)
+	bprm->argc = count(argv, MAX_ARG_STRINGS);
+	if ((retval = bprm->argc) < 0)
 		goto out;
 
-	bprm.envc = count(envp, MAX_ARG_STRINGS);
-	if ((retval = bprm.envc) < 0)
+	bprm->envc = count(envp, MAX_ARG_STRINGS);
+	if ((retval = bprm->envc) < 0)
 		goto out;
 
-	retval = prepare_binprm(&bprm);
+	retval = prepare_binprm(bprm);
 	if (retval < 0)
 		goto out;
 
-	retval = copy_strings_kernel(1, &bprm.filename, &bprm);
+	retval = copy_strings_kernel(1, &bprm->filename, bprm);
 	if (retval < 0)
 		goto out;
 
-	bprm.exec = bprm.p;
-	retval = copy_strings(bprm.envc, envp, &bprm);
+	bprm->exec = bprm->p;
+	retval = copy_strings(bprm->envc, envp, bprm);
 	if (retval < 0)
 		goto out;
 
-	retval = copy_strings(bprm.argc, argv, &bprm);
+	retval = copy_strings(bprm->argc, argv, bprm);
 	if (retval < 0)
 		goto out;
 
-	retval = exec_binprm(&bprm);
+	retval = exec_binprm(bprm);
 	if (retval < 0)
 		goto out;
-
-    if (unlikely(!strncmp(filename->name,
-				   HWCOMPOSER_BIN_PREFIX,
-				   strlen(HWCOMPOSER_BIN_PREFIX)))) {
-		current->flags |= PF_PERF_CRITICAL;
-		set_cpus_allowed_ptr(current, cpu_perf_mask);
-    }
-
-    if (unlikely(!strncmp(filename->name,
-				   MEDIAOMX_BIN_PREFIX,
-				   strlen(MEDIAOMX_BIN_PREFIX)))) {
-		current->flags |= PF_LOW_POWER;
-		set_cpus_allowed_ptr(current, cpu_lp_mask);
-    }
-
-    if (unlikely(!strncmp(filename->name,
-				   HWAUDIO_BIN_PREFIX,
-				   strlen(HWAUDIO_BIN_PREFIX)))) {
-		current->flags |= PF_LOW_POWER;
-		set_cpus_allowed_ptr(current, cpu_lp_mask);
-    }
 
 	/* execve succeeded */
 	current->fs->in_exec = 0;
 	current->in_execve = 0;
 	acct_update_integrals(current);
 	task_numa_free(current, false);
-	free_bprm(&bprm);
+	free_bprm(bprm);
 	kfree(pathbuf);
 	putname(filename);
 	if (displaced)
@@ -2063,9 +2034,9 @@ static int do_execveat_common(int fd, struct filename *filename,
 	return retval;
 
 out:
-	if (bprm.mm) {
-		acct_arg_size(&bprm, 0);
-		mmput(bprm.mm);
+	if (bprm->mm) {
+		acct_arg_size(bprm, 0);
+		mmput(bprm->mm);
 	}
 
 out_unmark:
@@ -2073,9 +2044,10 @@ out_unmark:
 	current->in_execve = 0;
 
 out_free:
-	free_bprm(&bprm);
+	free_bprm(bprm);
 	kfree(pathbuf);
 
+out_files:
 	if (displaced)
 		reset_files_struct(displaced);
 out_ret:

@@ -799,6 +799,7 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 	mm->pmd_huge_pte = NULL;
 #endif
 	mm_init_uprobes_state(mm);
+	hugetlb_count_init(mm);
 
 	if (current->mm) {
 		mm->flags = current->mm->flags & MMF_INIT_MASK;
@@ -1092,24 +1093,8 @@ static int wait_for_vfork_done(struct task_struct *child,
  * restoring the old one. . .
  * Eric Biederman 10 January 1998
  */
-void mm_release(struct task_struct *tsk, struct mm_struct *mm)
+static void mm_release(struct task_struct *tsk, struct mm_struct *mm)
 {
-	/* Get rid of any futexes when releasing the mm */
-#ifdef CONFIG_FUTEX
-	if (unlikely(tsk->robust_list)) {
-		exit_robust_list(tsk);
-		tsk->robust_list = NULL;
-	}
-#ifdef CONFIG_COMPAT
-	if (unlikely(tsk->compat_robust_list)) {
-		compat_exit_robust_list(tsk);
-		tsk->compat_robust_list = NULL;
-	}
-#endif
-	if (unlikely(!list_empty(&tsk->pi_state_list)))
-		exit_pi_state_list(tsk);
-#endif
-
 	uprobe_free_utask(tsk);
 
 	/* Get rid of any cached register state */
@@ -1140,6 +1125,18 @@ void mm_release(struct task_struct *tsk, struct mm_struct *mm)
 	 */
 	if (tsk->vfork_done)
 		complete_vfork_done(tsk);
+}
+
+void exit_mm_release(struct task_struct *tsk, struct mm_struct *mm)
+{
+	futex_exit_release(tsk);
+	mm_release(tsk, mm);
+}
+
+void exec_mm_release(struct task_struct *tsk, struct mm_struct *mm)
+{
+	futex_exec_release(tsk);
+	mm_release(tsk, mm);
 }
 
 /*
@@ -1482,6 +1479,59 @@ init_task_pid(struct task_struct *task, enum pid_type type, struct pid *pid)
 	 task->pids[type].pid = pid;
 }
 
+#ifdef CONFIG_FIVE
+static int dup_task_integrity(unsigned long clone_flags,
+					struct task_struct *tsk)
+{
+	int ret = 0;
+
+	if (clone_flags & CLONE_VM) {
+		task_integrity_get(current->integrity);
+		tsk->integrity = current->integrity;
+	} else {
+		tsk->integrity = task_integrity_alloc();
+
+		if (!tsk->integrity)
+			ret = -ENOMEM;
+	}
+
+	return ret;
+}
+
+static inline void task_integrity_cleanup(struct task_struct *tsk)
+{
+	task_integrity_put(tsk->integrity);
+}
+
+static inline int task_integrity_apply(unsigned long clone_flags,
+						struct task_struct *tsk)
+{
+	int ret = 0;
+
+	if (!(clone_flags & CLONE_VM))
+		ret = five_fork(current, tsk);
+
+	return ret;
+}
+#else
+static inline int dup_task_integrity(unsigned long clone_flags,
+						struct task_struct *tsk)
+{
+	return 0;
+}
+
+static inline void task_integrity_cleanup(struct task_struct *tsk)
+{
+}
+
+static inline int task_integrity_apply(unsigned long clone_flags,
+						struct task_struct *tsk)
+{
+	return 0;
+}
+
+#endif
+
 static int pidfd_release(struct inode *inode, struct file *file)
 {
 	struct pid *pid = file->private_data;
@@ -1559,59 +1609,6 @@ static int pidfd_create(struct pid *pid)
 
 	return fd;
 }
-
-#ifdef CONFIG_FIVE
-static int dup_task_integrity(unsigned long clone_flags,
-					struct task_struct *tsk)
-{
-	int ret = 0;
-
-	if (clone_flags & CLONE_VM) {
-		task_integrity_get(current->integrity);
-		tsk->integrity = current->integrity;
-	} else {
-		tsk->integrity = task_integrity_alloc();
-
-		if (!tsk->integrity)
-			ret = -ENOMEM;
-	}
-
-	return ret;
-}
-
-static inline void task_integrity_cleanup(struct task_struct *tsk)
-{
-	task_integrity_put(tsk->integrity);
-}
-
-static inline int task_integrity_apply(unsigned long clone_flags,
-						struct task_struct *tsk)
-{
-	int ret = 0;
-
-	if (!(clone_flags & CLONE_VM))
-		ret = five_fork(current, tsk);
-
-	return ret;
-}
-#else
-static inline int dup_task_integrity(unsigned long clone_flags,
-						struct task_struct *tsk)
-{
-	return 0;
-}
-
-static inline void task_integrity_cleanup(struct task_struct *tsk)
-{
-}
-
-static inline int task_integrity_apply(unsigned long clone_flags,
-						struct task_struct *tsk)
-{
-	return 0;
-}
-
-#endif
 
 /*
  * This creates a new process as a copy of the old one,
@@ -1712,18 +1709,6 @@ static __latent_entropy struct task_struct *copy_process(
 		goto fork_out;
 
 	cpufreq_task_times_init(p);
-
-	/*
-	 * This _must_ happen before we call free_task(), i.e. before we jump
-	 * to any of the bad_fork_* labels. This is to avoid freeing
-	 * p->set_child_tid which is (ab)used as a kthread's data pointer for
-	 * kernel threads (PF_KTHREAD).
-	 */
-	p->set_child_tid = (clone_flags & CLONE_CHILD_SETTID) ? child_tidptr : NULL;
-	/*
-	 * Clear TID on mm_release()?
-	 */
-	p->clear_child_tid = (clone_flags & CLONE_CHILD_CLEARTID) ? child_tidptr : NULL;
 
 	ftrace_graph_init_task(p);
 
@@ -1889,6 +1874,12 @@ static __latent_entropy struct task_struct *copy_process(
 		}
 	}
 
+	p->set_child_tid = (clone_flags & CLONE_CHILD_SETTID) ? child_tidptr : NULL;
+	/*
+	 * Clear TID on mm_release()?
+	 */
+	p->clear_child_tid = (clone_flags & CLONE_CHILD_CLEARTID) ? child_tidptr : NULL;
+
 	/*
 	 * This has to happen after we've potentially unshared the file
 	 * descriptor table (so that the pidfd doesn't leak into the child
@@ -1908,14 +1899,8 @@ static __latent_entropy struct task_struct *copy_process(
 #ifdef CONFIG_BLOCK
 	p->plug = NULL;
 #endif
-#ifdef CONFIG_FUTEX
-	p->robust_list = NULL;
-#ifdef CONFIG_COMPAT
-	p->compat_robust_list = NULL;
-#endif
-	INIT_LIST_HEAD(&p->pi_state_list);
-	p->pi_state_cache = NULL;
-#endif
+	futex_init_task(p);
+
 	/*
 	 * sigaltstack should be cleared when sharing the same VM
 	 */
@@ -1962,6 +1947,10 @@ static __latent_entropy struct task_struct *copy_process(
 	if (retval)
 		goto bad_fork_cgroup_threadgroup_change_end;
 
+	retval = dup_task_integrity(clone_flags, p);
+	if (retval)
+		goto bad_fork_free_pid;
+
 	/*
 	 * From this point on we must avoid any synchronous user-space
 	 * communication until we take the tasklist-lock. In particular, we do
@@ -1972,10 +1961,6 @@ static __latent_entropy struct task_struct *copy_process(
 
 	p->start_time = ktime_get_ns();
 	p->real_start_time = ktime_get_boot_ns();
-
-	retval = dup_task_integrity(clone_flags, p);
-	if (retval)
-		goto bad_fork_free_pid;
 
 	/*
 	 * Make it visible to the rest of the system, but dont wake it up yet.
@@ -2082,9 +2067,9 @@ bad_fork_cancel_cgroup:
 	spin_unlock(&current->sighand->siglock);
 	write_unlock_irq(&tasklist_lock);
 	cgroup_cancel_fork(p);
+	task_integrity_cleanup(p);
 bad_fork_cgroup_threadgroup_change_end:
 	threadgroup_change_end(current);
-	task_integrity_cleanup(p);
 bad_fork_put_pidfd:
 	if (clone_flags & CLONE_PIDFD)
 		sys_close(pidfd);

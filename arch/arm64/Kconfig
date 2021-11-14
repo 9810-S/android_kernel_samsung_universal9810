@@ -126,9 +126,7 @@ config MMU
 	def_bool y
 
 config DEBUG_RODATA
-	bool "Make kernel text and rodata read-only"
-	help
-	  If in doubt, say Y
+	def_bool y
 
 config ARM64_PAGE_SHIFT
 	int
@@ -443,7 +441,7 @@ config ARM64_ERRATUM_1024718
 	help
 	  This option adds work around for Arm Cortex-A55 Erratum 1024718.
 
-	  Affected Cortex-A55 cores (r0p0, r0p1, r1p0) could cause incorrect
+	  Affected Cortex-A55 cores (all revisions) could cause incorrect
 	  update of the hardware dirty bit when the DBM/AP bits are updated
 	  without a break-before-make. The work around is to disable the usage
 	  of hardware DBM locally on the affected cores. CPUs not affected by
@@ -782,9 +780,6 @@ config ARCH_SPARSEMEM_DEFAULT
 
 config ARCH_SELECT_MEMORY_MODEL
 	def_bool ARCH_SPARSEMEM_ENABLE
-
-config ARCH_FLATMEM_ENABLE
-	def_bool !NUMA
 
 config HAVE_ARCH_PFN_VALID
 	def_bool ARCH_HAS_HOLES_MEMORYMODEL || !SPARSEMEM
@@ -1433,10 +1428,6 @@ config SYSVIPC_COMPAT
 	def_bool y
 	depends on COMPAT && SYSVIPC
 
-config KEYS_COMPAT
-	def_bool y
-	depends on COMPAT && KEYS
-
 config COMPAT_VDSO
 	bool "32-bit vDSO"
 	depends on COMPAT
@@ -1461,6 +1452,10 @@ config CROSS_COMPILE_ARM32
 	help
 	  Same as setting CROSS_COMPILE_ARM32 in the environment, but saved for
 	  future builds. The environment variable overrides this config option.
+
+config KEYS_COMPAT
+	def_bool y
+	depends on COMPAT && KEYS
 
 endmenu
 

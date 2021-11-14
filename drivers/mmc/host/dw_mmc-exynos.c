@@ -414,6 +414,8 @@ static void dw_mci_exynos_adjust_clock(struct dw_mci *host, unsigned int wanted)
 	host->current_speed = 0;
 }
 
+#define KHZ (1000)
+
 static void dw_mci_exynos_set_ios(struct dw_mci *host, struct mmc_ios *ios)
 {
 	struct dw_mci_exynos_priv_data *priv = host->priv;
@@ -478,6 +480,9 @@ static void dw_mci_exynos_set_ios(struct dw_mci *host, struct mmc_ios *ios)
 	default:
 		clksel = priv->sdr_timing;
 	}
+
+	if ((ios->clock > 0) && (ios->clock <= 400 * KHZ))
+		sample_path_sel_dis(host, AXI_BURST_LEN);
 
 	host->cclk_in = wanted;
 
@@ -1114,7 +1119,7 @@ static int dw_mci_exynos_execute_tuning(struct dw_mci_slot *slot, u32 opcode,
 		if (host->pdata->only_once_tune)
 			host->pdata->tuned = true;
 
-		if (best_sample_ori % 2)
+			if (best_sample_ori % 2)
 			best_sample += 1;
 
 		dw_mci_exynos_set_sample(host, best_sample, false);
@@ -1552,6 +1557,18 @@ static s8 dw_mci_exynos_get_best_clksmpl(u8 candiates)
 		}
 	}
 
+	/*
+	 * If there is no cadiates value, then it needs to return -EIO.
+	 * If there are candiates values and don't find bset clk sample value,
+	 * then use a first candiates clock sample value.
+	 */
+	for (i = 0; i < iter; i++) {
+		__c = ror8(candiates, i);
+		if ((__c & 0x1) == 0x1) {
+			loc = i;
+			goto out;
+		}
+	}
 out:
 	return loc;
 }
@@ -1582,6 +1599,8 @@ static int dw_mci_exynos_execute_tuning(struct dw_mci_slot *slot, u32 opcode)
 		priv->tuned_sample = found;
 	} else {
 		ret = -EIO;
+		dev_warn(&mmc->class_dev,
+			"There is no candiates value about clksmpl!\n");
 	}
 
 	return ret;

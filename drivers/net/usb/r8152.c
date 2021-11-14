@@ -1254,6 +1254,9 @@ static void read_bulk_callback(struct urb *urb)
 		netif_device_detach(tp->netdev);
 		return;
 	case -ENOENT:
+	case -EPROTO:
+		netif_info(tp, intr, tp->netdev,
+				"Stop submitting intr, status %d\n", status);
 		return;	/* the urb is in unlink state */
 	case -ETIME:
 		if (net_ratelimit())
@@ -5741,9 +5744,11 @@ static int rtl8152_close(struct net_device *netdev)
 		res = rtl_s5_wol(tp);
 #endif
 		mutex_unlock(&tp->control);
-
-		usb_autopm_put_interface(tp->intf);
 	}
+
+	if (!res)
+		usb_autopm_put_interface(tp->intf);
+
 	timeleft = wait_event_interruptible_timeout(tp->bottom_half_wait_q,
 					tp->bottom_half_event, (tp->bottom_half_wait_time)*HZ);
 	pr_info("%s : wait for end of rx_bottom , timeleft = %d\n", __func__, timeleft);
@@ -6268,6 +6273,9 @@ static int rtl8152_set_wol(struct net_device *dev, struct ethtool_wolinfo *wol)
 
 	if (unlikely(tp->rtk_enable_diag))
 		return -EBUSY;
+
+	if (wol->wolopts & ~WAKE_ANY)
+		return -EINVAL;
 
 	ret = usb_autopm_get_interface(tp->intf);
 	if (ret < 0)
@@ -7267,6 +7275,9 @@ static int rtl8152_probe(struct usb_interface *intf,
 #endif
 		return -ENODEV;
 	}
+
+	if (intf->cur_altsetting->desc.bNumEndpoints < 3)
+		return -ENODEV;
 
 	usb_reset_device(udev);
 	netdev = alloc_etherdev(sizeof(struct r8152));

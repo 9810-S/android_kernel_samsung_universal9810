@@ -90,10 +90,6 @@
 #include <linux/delay.h>
 // ] SEC_SELINUX_PORTING_COMMON
 
-#ifdef CONFIG_LOD_SEC
-#include <linux/linux_on_dex.h>
-#endif
-
 #include "avc.h"
 #include "objsec.h"
 #include "netif.h"
@@ -104,13 +100,9 @@
 #include "audit.h"
 #include "avc_ss.h"
 
-#ifdef CONFIG_LOD_SEC
 #ifdef CONFIG_RKP_KDP
 #define rkp_is_lod_cred(x) ((x->type)>>3 & 1)
-#else
-#define rkp_is_lod_cred(x) (uid_is_LOD(x->uid.val) || (strcmp(current->comm, "nst") == 0 && x->uid.val == 0))
 #endif  /* CONFIG_RKP_KDP */
-#endif  /* CONFIG_LOD_SEC */
 
 #ifdef CONFIG_RKP_NS_PROT
 extern unsigned int cmp_ns_integrity(void);
@@ -128,18 +120,18 @@ extern void rkp_free_security(unsigned long tsec);
 u8 rkp_ro_page(unsigned long addr);
 static inline unsigned int cmp_sec_integrity(const struct cred *cred,struct mm_struct *mm)
 {
-	return ((cred->bp_task != current) ||
-			(mm && (!( in_interrupt() || in_softirq())) &&
+	return ((cred->bp_task != current) || 
+			(mm && (!( in_interrupt() || in_softirq())) && 
 			(cred->bp_pgd != swapper_pg_dir) &&
 			(mm->pgd != cred->bp_pgd)));
-
+			
 }
 extern struct cred init_cred;
 static inline unsigned int rkp_is_valid_cred_sp(u64 cred,u64 sp)
 {
 		struct task_security_struct *tsec = (struct task_security_struct *)sp;
 
-		if((cred == (u64)&init_cred) &&
+		if((cred == (u64)&init_cred) && 
 			( sp == (u64)&init_sec)){
 			return 0;
 		}
@@ -170,7 +162,7 @@ inline void rkp_print_debug(void)
 /* Main function to verify cred security context of a process */
 int security_integrity_current(void)
 {
-	if ( rkp_cred_enable &&
+	if ( rkp_cred_enable && 
 		(rkp_is_valid_cred_sp((u64)current_cred(),(u64)current_cred()->security)||
 		cmp_sec_integrity(current_cred(),current->mm)||
 		cmp_ns_integrity())) {
@@ -1863,26 +1855,10 @@ static int cred_has_capability(const struct cred *cred,
 
 	switch (CAP_TO_INDEX(cap)) {
 	case 0:
-#if defined(CONFIG_LOD_SEC)
-		if (!initns && rkp_is_lod_cred(cred)) {
-			sclass = SECCLASS_CAP_LOD;
-		} else {
-			sclass = initns ? SECCLASS_CAPABILITY : SECCLASS_CAP_USERNS;
-		}
-#else
 		sclass = initns ? SECCLASS_CAPABILITY : SECCLASS_CAP_USERNS;
-#endif
 		break;
 	case 1:
-#if defined(CONFIG_LOD_SEC)
-		if (!initns && rkp_is_lod_cred(cred)) {
-			sclass = SECCLASS_CAP2_LOD;
-		} else {
-			sclass = initns ? SECCLASS_CAPABILITY2 : SECCLASS_CAP2_USERNS;
-		}
-#else
 		sclass = initns ? SECCLASS_CAPABILITY2 : SECCLASS_CAP2_USERNS;
-#endif
 		break;
 	default:
 		printk(KERN_ERR
@@ -3125,7 +3101,7 @@ static int selinux_sb_kern_mount(struct super_block *sb, int flags, void *data)
 	struct common_audit_data ad;
 	int rc;
 
-#ifdef CONFIG_RKP_KDP
+#ifdef CONFIG_RKP_KDP	
 	if ((rc = security_integrity_current()))
 		return rc;
 #endif  /* CONFIG_RKP_KDP */
@@ -3445,7 +3421,6 @@ static noinline int audit_inode_permission(struct inode *inode,
 					   int result,
 					   unsigned flags)
 {
-#ifdef CONFIG_AUDIT
 	struct common_audit_data ad;
 	struct inode_security_struct *isec = inode->i_security;
 	int rc;
@@ -3460,7 +3435,6 @@ static noinline int audit_inode_permission(struct inode *inode,
 			    audited, denied, result, &ad, flags);
 	if (rc)
 		return rc;
-#endif
 	return 0;
 }
 
@@ -4245,7 +4219,7 @@ static void selinux_file_set_fowner(struct file *file)
 #ifdef CONFIG_RKP_KDP
 	int rc;
 	if ((rc = security_integrity_current()))
-		return;
+		return; 
 #endif  /* CONFIG_RKP_KDP */
 	fsec = file->f_security;
 	fsec->fown_sid = current_sid();
@@ -5423,7 +5397,7 @@ static int selinux_socket_unix_may_send(struct socket *sock,
 	struct lsm_network_audit net = {0,};
 #ifdef CONFIG_RKP_KDP
 	int rc;
-
+	
 	if ((rc = security_integrity_current()))
 		return rc;
 #endif  /* CONFIG_RKP_KDP */
@@ -5642,15 +5616,22 @@ out:
 
 static int selinux_sk_alloc_security(struct sock *sk, int family, gfp_t priority)
 {
-	struct sk_security_struct *sksec = sk->sk_security;
+	struct sk_security_struct *sksec;
+#ifdef CONFIG_RKP_KDP
+	int rc;
 
-#ifdef CONFIG_NETLABEL
-	memset(sksec, 0, offsetof(struct sk_security_struct, sid));
-#endif
+	if ((rc = security_integrity_current()))
+		return rc;
+#endif  /* CONFIG_RKP_KDP */
+	sksec = kzalloc(sizeof(*sksec), priority);
+	if (!sksec)
+		return -ENOMEM;
+
 	sksec->peer_sid = SECINITSID_UNLABELED;
 	sksec->sid = SECINITSID_UNLABELED;
 	sksec->sclass = SECCLASS_SOCKET;
 	selinux_netlbl_sk_security_reset(sksec);
+	sk->sk_security = sksec;
 
 	return 0;
 }
@@ -5665,12 +5646,14 @@ static void selinux_sk_free_security(struct sock *sk)
 		return;
 #endif  /* CONFIG_RKP_KDP */
 
+	sk->sk_security = NULL;
 	selinux_netlbl_sk_security_free(sksec);
+	kfree(sksec);
 }
 
 static void selinux_sk_clone_security(const struct sock *sk, struct sock *newsk)
 {
-	const struct sk_security_struct *sksec = sk->sk_security;
+	struct sk_security_struct *sksec = sk->sk_security;
 	struct sk_security_struct *newsksec = newsk->sk_security;
 #ifdef CONFIG_RKP_KDP
 	int rc;
@@ -5688,7 +5671,7 @@ static void selinux_sk_clone_security(const struct sock *sk, struct sock *newsk)
 
 static void selinux_sk_getsecid(struct sock *sk, u32 *secid)
 {
-
+	
 #ifdef CONFIG_RKP_KDP
 	int rc;
 
@@ -5966,45 +5949,59 @@ static int selinux_tun_dev_open(void *security)
 
 static int selinux_nlmsg_perm(struct sock *sk, struct sk_buff *skb)
 {
-	int err = 0;
-	u32 perm;
+	int rc = 0;
+	unsigned int msg_len;
+	unsigned int data_len = skb->len;
+	unsigned char *data = skb->data;
 	struct nlmsghdr *nlh;
 	struct sk_security_struct *sksec = sk->sk_security;
+	u16 sclass = sksec->sclass;
+	u32 perm;
 
-	if (skb->len < NLMSG_HDRLEN) {
-		err = -EINVAL;
-		goto out;
-	}
-	nlh = nlmsg_hdr(skb);
+	while (data_len >= nlmsg_total_size(0)) {
+		nlh = (struct nlmsghdr *)data;
 
-	err = selinux_nlmsg_lookup(sksec->sclass, nlh->nlmsg_type, &perm);
-	if (err) {
-		if (err == -EINVAL) {
+		/* NOTE: the nlmsg_len field isn't reliably set by some netlink
+		 *       users which means we can't reject skb's with bogus
+		 *       length fields; our solution is to follow what
+		 *       netlink_rcv_skb() does and simply skip processing at
+		 *       messages with length fields that are clearly junk
+		 */
+		if (nlh->nlmsg_len < NLMSG_HDRLEN || nlh->nlmsg_len > data_len)
+			return 0;
+
+		rc = selinux_nlmsg_lookup(sclass, nlh->nlmsg_type, &perm);
+		if (rc == 0) {
+			rc = sock_has_perm(current, sk, perm);
+			if (rc)
+				return rc;
+		} else if (rc == -EINVAL) {
+			/* -EINVAL is a missing msg/perm mapping */
 			pr_warn_ratelimited("SELinux: unrecognized netlink"
-			       " message: protocol=%hu nlmsg_type=%hu sclass=%s"
-			       " pig=%d comm=%s\n",
-			       sk->sk_protocol, nlh->nlmsg_type,
-			       secclass_map[sksec->sclass - 1].name,
-			       task_pid_nr(current), current->comm);
-// [ SEC_SELINUX_PORTING_COMMON
-#ifdef CONFIG_ALWAYS_ENFORCE
-			if (security_get_allow_unknown())
-#else
-			if (!selinux_enforcing || security_get_allow_unknown())
-#endif
-// ] SEC_SELINUX_PORTING_COMMON
-				err = 0;
+				" message: protocol=%hu nlmsg_type=%hu sclass=%s"
+				" pid=%d comm=%s\n",
+				sk->sk_protocol, nlh->nlmsg_type,
+				secclass_map[sclass - 1].name,
+				task_pid_nr(current), current->comm);
+			if (selinux_enforcing && !security_get_allow_unknown())
+				return rc;
+			rc = 0;
+		} else if (rc == -ENOENT) {
+			/* -ENOENT is a missing socket/class mapping, ignore */
+			rc = 0;
+		} else {
+			return rc;
 		}
 
-		/* Ignore */
-		if (err == -ENOENT)
-			err = 0;
-		goto out;
+		/* move to the next message after applying netlink padding */
+		msg_len = NLMSG_ALIGN(nlh->nlmsg_len);
+		if (msg_len >= data_len)
+			return 0;
+		data_len -= msg_len;
+		data += msg_len;
 	}
 
-	err = sock_has_perm(current, sk, perm);
-out:
-	return err;
+	return rc;
 }
 
 #ifdef CONFIG_NETFILTER
@@ -6462,7 +6459,7 @@ static void selinux_msg_queue_free_security(struct msg_queue *msq)
 	if ((rc = security_integrity_current()))
 		return;
 #endif  /* CONFIG_RKP_KDP */
-
+ 
 	ipc_free_security(&msq->q_perm);
 }
 
@@ -6633,7 +6630,7 @@ static void selinux_shm_free_security(struct shmid_kernel *shp)
 	if ((rc = security_integrity_current()))
 		return;
 #endif  /* CONFIG_RKP_KDP */
-
+ 
 	ipc_free_security(&shp->shm_perm);
 }
 

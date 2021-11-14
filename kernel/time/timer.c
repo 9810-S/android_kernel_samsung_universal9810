@@ -43,6 +43,7 @@
 #include <linux/slab.h>
 #include <linux/compat.h>
 #include <linux/exynos-ss.h>
+#include <linux/random.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -210,7 +211,7 @@ struct timer_base {
 static DEFINE_PER_CPU(struct timer_base, timer_bases[NR_BASES]);
 
 #if defined(CONFIG_SMP) && defined(CONFIG_NO_HZ_COMMON)
-unsigned int sysctl_timer_migration = 0;
+unsigned int sysctl_timer_migration = 1;
 
 void timers_update_migration(bool update_nohz)
 {

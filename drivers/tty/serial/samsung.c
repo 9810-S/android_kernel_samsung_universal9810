@@ -346,7 +346,7 @@ uart_error_cnt_show(struct device *dev, struct device_attribute *attr, char *buf
 	return ret;
 }
 
-static DEVICE_ATTR(error_cnt, 0444, uart_error_cnt_show, NULL);
+static DEVICE_ATTR(error_cnt, S_IRUGO, uart_error_cnt_show, NULL);
 
 struct proc_dir_entry *bluetooth_dir, *bt_log_dir;
 struct proc_dir_entry *serial_dir, *serial_log_dir;
@@ -1075,13 +1075,13 @@ static unsigned int s3c24xx_serial_getclk(struct s3c24xx_uart_port *ourport,
 {
 	struct s3c24xx_uart_info *info = ourport->info;
 	unsigned long rate;
-	unsigned int cnt, baud, quot, clk_sel, best_quot = 0;
+	unsigned int cnt, baud, quot, best_quot = 0;
 	int calc_deviation, deviation = (1 << 30) - 1;
 
-	clk_sel = (ourport->cfg->clk_sel) ? ourport->cfg->clk_sel :
-			ourport->info->def_clk_sel;
 	for (cnt = 0; cnt < info->num_clks; cnt++) {
-		if (!(clk_sel & (1 << cnt)))
+		/* Keep selected clock if provided */
+		if (ourport->cfg->clk_sel &&
+			!(ourport->cfg->clk_sel & (1 << cnt)))
 			continue;
 
 		rate = clk_get_rate(ourport->clk);
@@ -1272,6 +1272,7 @@ static void s3c24xx_serial_set_termios(struct uart_port *port,
 	umcon = rd_regl(port, S3C2410_UMCON);
 	if (termios->c_cflag & CRTSCTS) {
 		umcon |= S3C2410_UMCOM_AFC;
+		port->status = UPSTAT_AUTOCTS;
 	} else {
 		umcon &= ~S3C2410_UMCOM_AFC;
 	}
@@ -1687,9 +1688,11 @@ static int s3c24xx_serial_init_port(struct s3c24xx_uart_port *ourport,
 		ourport->tx_irq = ret + 1;
 	}
 
-	ret = platform_get_irq(platdev, 1);
-	if (ret > 0)
-		ourport->tx_irq = ret;
+	if (!s3c24xx_serial_has_interrupt_mask(port)) {
+		ret = platform_get_irq(platdev, 1);
+		if (ret > 0)
+			ourport->tx_irq = ret;
+	}
 
 	if (of_get_property(platdev->dev.of_node,
 			"samsung,separate-uart-clk", NULL))

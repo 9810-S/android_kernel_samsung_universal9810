@@ -634,7 +634,7 @@ static void tx_complete(struct usb_ep *ep, struct usb_request *req)
 				retval = usb_ep_queue(in, new_req, GFP_ATOMIC);
 				switch (retval) {
 				default:
-					printk(KERN_ERR"usb: dropped tx_complete_newreq(%p)\n", new_req);
+					printk(KERN_ERR"usb: dropped tx_complete_newreq(%pK)\n", new_req);
 					DBG(dev, "tx queue err %d\n", retval);
 					new_req->length = 0;
 					spin_lock(&dev->req_lock);
@@ -821,8 +821,9 @@ static netdev_tx_t eth_start_xmit(struct sk_buff *skb,
 	}
 	spin_unlock_irqrestore(&dev->lock, flags);
 
-	if (skb && !in) {
-		dev_kfree_skb_any(skb);
+	if (!in) {
+		if (skb)
+			dev_kfree_skb_any(skb);
 		return NETDEV_TX_OK;
 	}
 
@@ -951,7 +952,11 @@ static netdev_tx_t eth_start_xmit(struct sk_buff *skb,
 			req->buf = skb->data;
 			req->context = skb;
 		} else { /* rndis case : multipacket not used */
+#ifdef CONFIG_USB_RNDIS_MULTIPACKET_WITH_TIMER
 			req->length = skb->len;
+#else
+			length = skb->len;
+#endif
 			/* copy skb data */
 			memcpy(req->buf, skb->data,
 				skb->len);
@@ -1235,8 +1240,8 @@ struct eth_dev *gether_setup_name(struct usb_gadget *g,
 		free_netdev(net);
 		dev = ERR_PTR(status);
 	} else {
-		INFO(dev, "MAC %pM\n", net->dev_addr);
-		INFO(dev, "HOST MAC %pM\n", dev->host_mac);
+		DBG(dev, "MAC %pM\n", net->dev_addr);
+		DBG(dev, "HOST MAC %pM\n", dev->host_mac);
 
 		/*
 		 * two kinds of host-initiated state changes:

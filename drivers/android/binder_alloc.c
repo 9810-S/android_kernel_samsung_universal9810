@@ -914,8 +914,9 @@ enum lru_status binder_alloc_free_page(struct list_head *item,
 		goto err_mmget;
 	if (!down_write_trylock(&mm->mmap_sem))
 		goto err_down_write_mmap_sem_failed;
-	vma = alloc->vma;
 
+	vma = alloc->vma;
+	
 	list_lru_isolate(lru, item);
 	spin_unlock(lock);
 
@@ -926,6 +927,7 @@ enum lru_status binder_alloc_free_page(struct list_head *item,
 
 		trace_binder_unmap_user_end(alloc, index);
 	}
+
 	up_write(&mm->mmap_sem);
 	mmput(mm);
 
@@ -1166,3 +1168,4 @@ void binder_alloc_copy_from_buffer(struct binder_alloc *alloc,
 	binder_alloc_do_buffer_copy(alloc, false, buffer, buffer_offset,
 				    dest, bytes);
 }
+

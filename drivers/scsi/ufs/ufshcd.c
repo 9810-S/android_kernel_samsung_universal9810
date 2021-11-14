@@ -231,6 +231,8 @@ ufs_get_pm_lvl_to_link_pwr_state(enum ufs_pm_level lvl)
 
 static struct ufs_dev_fix ufs_fixups[] = {
 	/* UFS cards deviations table */
+	UFS_FIX(UFS_VENDOR_MICRON, UFS_ANY_MODEL,
+		UFS_DEVICE_QUIRK_DELAY_BEFORE_LPM),
 	UFS_FIX(UFS_VENDOR_SAMSUNG, UFS_ANY_MODEL,
 		UFS_DEVICE_QUIRK_DELAY_BEFORE_LPM),
 	UFS_FIX(UFS_VENDOR_SAMSUNG, UFS_ANY_MODEL, UFS_DEVICE_NO_VCCQ),
@@ -1073,6 +1075,7 @@ unblock_reqs:
 int ufshcd_hold(struct ufs_hba *hba, bool async)
 {
 	int rc = 0;
+	bool flush_result;
 	unsigned long flags;
 
 	if (!ufshcd_is_clkgating_allowed(hba))
@@ -1093,22 +1096,24 @@ start:
 			hba->clk_gating.active_reqs--;
 	case CLKS_ON:
 		/*
-		 * Wait for the ungate work to complete if in progress.
-		 * Though the clocks may be in ON state, the link could
-		 * still be in hibner8 state if hibern8 is allowed
-		 * during clock gating.
-		 * Make sure we exit hibern8 state also in addition to
-		 * clocks being ON.
-		 */
-		if (ufshcd_can_hibern8_during_gating(hba) &&
-		    ufshcd_is_link_hibern8(hba)) {
+		*Wait for the ungate work to complete if in progress.
+		* Though the clocks may be in ON state, the link could
+		* still be in hibner8 state if hibern8 is allowed
+		* during clock gating.
+		* Make sure we exit hibern8 state also in addition to
+		* clocks being ON.
+		*/
+		if (!async && ufshcd_can_hibern8_during_gating(hba) &&
+			ufshcd_is_link_hibern8(hba)) {
 			if (async) {
 				rc = -EAGAIN;
 				hba->clk_gating.active_reqs--;
 				break;
 			}
 			spin_unlock_irqrestore(hba->host->host_lock, flags);
-			flush_work(&hba->clk_gating.ungate_work);
+			flush_result = flush_work(&hba->clk_gating.ungate_work);
+			if (hba->clk_gating.is_suspended && !flush_result)
+				goto out;
 			spin_lock_irqsave(hba->host->host_lock, flags);
 			goto start;
 		}
@@ -2107,6 +2112,7 @@ static int ufshcd_queuecommand(struct Scsi_Host *host, struct scsi_cmnd *cmd)
 
 	err = ufshcd_map_sg(hba, lrbp);
 	if (err) {
+		ufshcd_release(hba);
 		lrbp->cmd = NULL;
 		clear_bit_unlock(tag, &hba->lrb_in_use);
 		ufshcd_release(hba);
@@ -2313,8 +2319,18 @@ static int ufshcd_exec_dev_cmd(struct ufs_hba *hba,
 	struct completion wait;
 	unsigned long flags;
 
-	if (!ufshcd_is_link_active(hba))
-		return -EPERM;
+	ktime_t start = ktime_get();
+
+	/*
+	 * Add timeout to ensure link actvie status.
+	 * There is a case where link activity takes
+	 * a long time during tw control.
+	 */
+	while (!ufshcd_is_link_active(hba)) {
+		if (ktime_to_us(ktime_sub(ktime_get(), start)) > 50000)
+			return -EPERM;
+		usleep_range(200, 400);
+	}
 
 	/*
 	 * Get free slot, sleep if slots are unavailable.
@@ -5629,7 +5645,7 @@ static void ufshcd_sl_intr(struct ufs_hba *hba, u32 intr_status)
  */
 static irqreturn_t ufshcd_intr(int irq, void *__hba)
 {
-	u32 intr_status, enabled_intr_status;
+	u32 intr_status, enabled_intr_status = 0;
 	irqreturn_t retval = IRQ_NONE;
 	struct ufs_hba *hba = __hba;
 	int retries = hba->nutrs;
@@ -5643,7 +5659,7 @@ static irqreturn_t ufshcd_intr(int irq, void *__hba)
 	 * read, make sure we handle them by checking the interrupt status
 	 * again in a loop until we process all of the reqs before returning.
 	 */
-	do {
+	while (intr_status && retries--) {
 		enabled_intr_status =
 			intr_status & ufshcd_readl(hba, REG_INTERRUPT_ENABLE);
 		if (intr_status)
@@ -5654,7 +5670,7 @@ static irqreturn_t ufshcd_intr(int irq, void *__hba)
 		}
 
 		intr_status = ufshcd_readl(hba, REG_INTERRUPT_STATUS);
-	} while (intr_status && --retries);
+	}
 
 	spin_unlock(hba->host->host_lock);
 	return retval;
@@ -5784,16 +5800,13 @@ static int ufshcd_eh_device_reset_handler(struct scsi_cmnd *cmd)
 {
 	struct Scsi_Host *host;
 	struct ufs_hba *hba;
-	unsigned int tag;
 	u32 pos;
 	int err;
-	u8 resp = 0xF;
-	struct ufshcd_lrb *lrbp;
+	u8 resp = 0xF, lun;
 	unsigned long flags;
 
 	host = cmd->device->host;
 	hba = shost_priv(host);
-	tag = cmd->request->tag;
 
 	/* secure log */
 	exynos_smc(SMC_CMD_UFS_LOG, 1, 0, hba->secure_log.paddr);
@@ -5802,8 +5815,8 @@ static int ufshcd_eh_device_reset_handler(struct scsi_cmnd *cmd)
 	ufshcd_vops_dbg_register_dump(hba);
 	exynos_ufs_show_uic_info(hba);
 
-	lrbp = &hba->lrb[tag];
-	err = ufshcd_issue_tm_cmd(hba, lrbp->lun, 0, UFS_LOGICAL_RESET, &resp);
+	lun = ufshcd_scsi_to_upiu_lun(cmd->device->lun);
+	err = ufshcd_issue_tm_cmd(hba, lun, 0, UFS_LOGICAL_RESET, &resp);
 	if (err || resp != UPIU_TASK_MANAGEMENT_FUNC_COMPL) {
 		if (!err)
 			err = resp;
@@ -5812,7 +5825,7 @@ static int ufshcd_eh_device_reset_handler(struct scsi_cmnd *cmd)
 
 	/* clear the commands that were pending for corresponding LUN */
 	for_each_set_bit(pos, &hba->outstanding_reqs, hba->nutrs) {
-		if (hba->lrb[pos].lun == lrbp->lun) {
+		if (hba->lrb[pos].lun == lun) {
 			err = ufshcd_clear_cmd(hba, pos);
 			if (err)
 				break;
@@ -6731,16 +6744,12 @@ retry:
 		if (!hba->is_init_prefetch)
 			ufshcd_init_icc_levels(hba);
 
-		scsi_scan_host(hba->host);
-
 		/* Add required well known logical units to scsi mid layer */
 		ret = ufshcd_scsi_add_wlus(hba);
-		if (ret) {
-			dev_warn(hba->dev, "%s failed to add w-lus %d\n",
-				__func__, ret);
-			ret = 0;
-		}
+		if (ret)
+			goto out;
 
+		scsi_scan_host(hba->host);
 		pm_runtime_put_sync(hba->dev);
 	}
 
@@ -8820,7 +8829,7 @@ static void ufs_sec_send_errinfo(void *data)
 {
 	static struct ufs_hba *hba;
 	struct SEC_UFS_counting *err_info;
-	char buf[23];
+	char buf[22];
 
 	if (data) {
 		hba = (struct ufs_hba *)data;

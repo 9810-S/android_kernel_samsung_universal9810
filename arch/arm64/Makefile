@@ -99,11 +99,6 @@ KBUILD_CFLAGS	+= $(call cc-option, -mpc-relative-literal-loads)
 KBUILD_CFLAGS	+= -fno-pic
 KBUILD_AFLAGS	+= $(lseinstr) $(vdso32)
 
-ifeq ($(CONFIG_SOC_EXYNOS9810), y)
-EXYNOS9810_OPTIMIZATION_FLAGS := -mcpu=cortex-a55+crypto+crc -mtune=cortex-a55+crypto+crc
-KBUILD_CFLAGS	+= $(call cc-option, $(EXYNOS9810_OPTIMIZATION_FLAGS),)
-endif
-
 ifeq ($(CONFIG_CPU_BIG_ENDIAN), y)
 KBUILD_CPPFLAGS	+= -mbig-endian
 AS		+= -EB
@@ -122,7 +117,7 @@ ifeq ($(CONFIG_ARM64_MODULE_CMODEL_LARGE), y)
 KBUILD_CFLAGS_MODULE	+= -mcmodel=large
 ifeq ($(CONFIG_LTO_CLANG), y)
 # Code model is not stored in LLVM IR, so we need to pass it also to LLVMgold
-KBUILD_LDFLAGS_MODULE	+= -plugin-opt=-code-model=large
+LDFLAGS		+= -plugin-opt=-code-model=large
 endif
 endif
 
@@ -172,10 +167,6 @@ endif
 
 KBUILD_DTBS	:= dtbs
 
-ifeq ($(CONFIG_EXYNOS_DTBTOOL),y)
-KBUILD_DTBS	+= dtb.img
-endif
-
 all:	$(KBUILD_IMAGE) $(KBUILD_DTBS)
 
 boot := arch/arm64/boot
@@ -195,16 +186,13 @@ zinstall install:
 %.dtbo: scripts
 	$(Q)$(MAKE) $(build)=$(boot)/dts $(boot)/dts/$@
 
-PHONY += dtbs dtbs_install dtb.img
+PHONY += dtbs dtbs_install
 
 dtbs: prepare scripts
 	$(Q)$(MAKE) $(build)=$(boot)/dts
 
 dtbs_install:
 	$(Q)$(MAKE) $(dtbinst)=$(boot)/dts
-
-dtb.img: prepare scripts dtbs
-	$(Q)$(MAKE) $(build)=$(boot) $(boot)/$@
 
 Image-dtb Image.gz-dtb: vmlinux scripts dtbs
 	$(Q)$(MAKE) $(build)=$(boot) $(boot)/$@
@@ -235,7 +223,6 @@ endif
 define archhelp
   echo  '* Image.gz      - Compressed kernel image (arch/$(ARCH)/boot/Image.gz)'
   echo  '  Image         - Uncompressed kernel image (arch/$(ARCH)/boot/Image)'
-  echo  '  dtb.img       - Build device tree image (arch/$(ARCH)/boot/dtb.img)'
   echo  '* dtbs          - Build device tree blobs for enabled boards'
   echo  '  dtbs_install  - Install dtbs to $(INSTALL_DTBS_PATH)'
   echo  '  install       - Install uncompressed kernel'

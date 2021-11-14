@@ -196,30 +196,22 @@ static int pfkey_release(struct socket *sock)
 	return 0;
 }
 
-static int pfkey_broadcast_one(struct sk_buff *skb, struct sk_buff **skb2,
-			       gfp_t allocation, struct sock *sk)
+static int pfkey_broadcast_one(struct sk_buff *skb, gfp_t allocation,
+			       struct sock *sk)
 {
 	int err = -ENOBUFS;
 
-	sock_hold(sk);
-	if (*skb2 == NULL) {
-		if (atomic_read(&skb->users) != 1) {
-			*skb2 = skb_clone(skb, allocation);
-		} else {
-			*skb2 = skb;
-			atomic_inc(&skb->users);
-		}
+	if (atomic_read(&sk->sk_rmem_alloc) > sk->sk_rcvbuf)
+		return err;
+
+	skb = skb_clone(skb, allocation);
+
+	if (skb) {
+		skb_set_owner_r(skb, sk);
+		skb_queue_tail(&sk->sk_receive_queue, skb);
+		sk->sk_data_ready(sk);
+		err = 0;
 	}
-	if (*skb2 != NULL) {
-		if (atomic_read(&sk->sk_rmem_alloc) <= sk->sk_rcvbuf) {
-			skb_set_owner_r(*skb2, sk);
-			skb_queue_tail(&sk->sk_receive_queue, *skb2);
-			sk->sk_data_ready(sk);
-			*skb2 = NULL;
-			err = 0;
-		}
-	}
-	sock_put(sk);
 	return err;
 }
 
@@ -234,7 +226,6 @@ static int pfkey_broadcast(struct sk_buff *skb, gfp_t allocation,
 {
 	struct netns_pfkey *net_pfkey = net_generic(net, pfkey_net_id);
 	struct sock *sk;
-	struct sk_buff *skb2 = NULL;
 	int err = -ESRCH;
 
 	/* XXX Do we need something like netlink_overrun?  I think
@@ -253,7 +244,7 @@ static int pfkey_broadcast(struct sk_buff *skb, gfp_t allocation,
 		 * socket.
 		 */
 		if (pfk->promisc)
-			pfkey_broadcast_one(skb, &skb2, GFP_ATOMIC, sk);
+			pfkey_broadcast_one(skb, GFP_ATOMIC, sk);
 
 		/* the exact target will be processed later */
 		if (sk == one_sk)
@@ -268,7 +259,7 @@ static int pfkey_broadcast(struct sk_buff *skb, gfp_t allocation,
 				continue;
 		}
 
-		err2 = pfkey_broadcast_one(skb, &skb2, GFP_ATOMIC, sk);
+		err2 = pfkey_broadcast_one(skb, GFP_ATOMIC, sk);
 
 		/* Error is cleared after successful sending to at least one
 		 * registered KM */
@@ -278,9 +269,8 @@ static int pfkey_broadcast(struct sk_buff *skb, gfp_t allocation,
 	rcu_read_unlock();
 
 	if (one_sk != NULL)
-		err = pfkey_broadcast_one(skb, &skb2, allocation, one_sk);
+		err = pfkey_broadcast_one(skb, allocation, one_sk);
 
-	kfree_skb(skb2);
 	kfree_skb(skb);
 	return err;
 }
@@ -2933,7 +2923,7 @@ static int count_ah_combs(const struct xfrm_tmpl *t)
 			break;
 		if (!aalg->pfkey_supported)
 			continue;
-		if (aalg_tmpl_set(t, aalg) && aalg->available)
+		if (aalg_tmpl_set(t, aalg))
 			sz += sizeof(struct sadb_comb);
 	}
 	return sz + sizeof(struct sadb_prop);
@@ -2951,7 +2941,7 @@ static int count_esp_combs(const struct xfrm_tmpl *t)
 		if (!ealg->pfkey_supported)
 			continue;
 
-		if (!(ealg_tmpl_set(t, ealg) && ealg->available))
+		if (!(ealg_tmpl_set(t, ealg)))
 			continue;
 
 		for (k = 1; ; k++) {
@@ -2962,7 +2952,7 @@ static int count_esp_combs(const struct xfrm_tmpl *t)
 			if (!aalg->pfkey_supported)
 				continue;
 
-			if (aalg_tmpl_set(t, aalg) && aalg->available)
+			if (aalg_tmpl_set(t, aalg))
 				sz += sizeof(struct sadb_comb);
 		}
 	}

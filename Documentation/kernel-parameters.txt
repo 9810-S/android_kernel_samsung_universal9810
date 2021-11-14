@@ -2540,6 +2540,7 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 					       tsx_async_abort=off [X86]
 					       kvm.nx_huge_pages=off [X86]
 					       no_entry_flush [PPC]
+					       no_uaccess_flush [PPC]
 
 				Exceptions:
 					       This does not have any effect on
@@ -2896,6 +2897,9 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 
 	nospec_store_bypass_disable
 			[HW] Disable all mitigations for the Speculative Store Bypass vulnerability
+
+	no_uaccess_flush
+			[PPC] Don't flush the L1-D cache after accessing user data.
 
 	noxsave		[BUGS=X86] Disables x86 extended register state save
 			and restore using xsave. The kernel will fallback to
@@ -4102,14 +4106,6 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			last alloc / free. For more information see
 			Documentation/vm/slub.txt.
 
-	slub_memcg_sysfs=       [MM, SLUB]
-			Determines whether to enable sysfs directories for
-			memory cgroup sub-caches. 1 to enable, 0 to disable.
-			The default is determined by CONFIG_SLUB_MEMCG_SYSFS_ON.
-			Enabling this can lead to a very high number of debug
-			directories and files being created under
-			/sys/kernel/slub.
-
 	slub_max_order= [MM, SLUB]
 			Determines the maximum allowed order for slabs.
 			A high setting may cause OOMs due to memory
@@ -4288,6 +4284,26 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 	spia_fio_base=
 	spia_pedr=
 	spia_peddr=
+
+	srbds=		[X86,INTEL]
+			Control the Special Register Buffer Data Sampling
+			(SRBDS) mitigation.
+
+			Certain CPUs are vulnerable to an MDS-like
+			exploit which can leak bits from the random
+			number generator.
+
+			By default, this issue is mitigated by
+			microcode.  However, the microcode fix can cause
+			the RDRAND and RDSEED instructions to become
+			much slower.  Among other effects, this will
+			result in reduced throughput from /dev/urandom.
+
+			The microcode mitigation can be disabled with
+			the following option:
+
+			off:    Disable mitigation and remove
+				performance impact to RDRAND and RDSEED
 
 	ssbd=		[ARM64,HW]
 			Speculative Store Bypass Disable control
@@ -5026,6 +5042,14 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 	xen_nopv	[X86]
 			Disables the PV optimizations forcing the HVM guest to
 			run as generic HVM guest with no PV drivers.
+
+	xen.event_eoi_delay=	[XEN]
+			How long to delay EOI handling in case of event
+			storms (jiffies). Default is 10.
+
+	xen.event_loop_timeout=	[XEN]
+			After which time (jiffies) the event handling loop
+			should start to delay EOI handling. Default is 2.
 
 	xirc2ps_cs=	[NET,PCMCIA]
 			Format:

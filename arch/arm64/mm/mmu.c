@@ -112,6 +112,17 @@ static phys_addr_t __init early_pgtable_alloc(void)
 	return phys;
 }
 
+static bool pgattr_change_is_safe(u64 old, u64 new)
+{
+	/*
+	 * The following mapping attributes may be updated in live
+	 * kernel mappings without the need for break-before-make.
+	 */
+	static const pteval_t mask = PTE_PXN | PTE_RDONLY | PTE_WRITE;
+
+	return old  == 0 || new  == 0 || ((old ^ new) & ~mask) == 0;
+}
+
 #ifdef CONFIG_UH_RKP
 spinlock_t ro_rkp_pages_lock = __SPIN_LOCK_UNLOCKED();
 char ro_pages_stat[RO_PAGES] = {0};
@@ -196,17 +207,6 @@ unsigned int is_rkp_ro_page(u64 addr)
 		return 0;
 }
 #endif
-
-static bool pgattr_change_is_safe(u64 old, u64 new)
-{
-	/*
-	 * The following mapping attributes may be updated in live
-	 * kernel mappings without the need for break-before-make.
-	 */
-	static const pteval_t mask = PTE_PXN | PTE_RDONLY | PTE_WRITE;
-
-	return old  == 0 || new  == 0 || ((old ^ new) & ~mask) == 0;
-}
 
 static void alloc_init_pte(pmd_t *pmd, unsigned long addr,
 				  unsigned long end, unsigned long pfn,
@@ -352,6 +352,7 @@ static void alloc_init_pud(pgd_t *pgd, unsigned long addr, unsigned long end,
 			 */
 			BUG_ON(!pgattr_change_is_safe(pud_val(old_pud),
 						      pud_val(*pud)));
+
 		} else {
 			alloc_init_pmd(pud, addr, next, phys, prot,
 				       pgtable_alloc, allow_block_mappings);
@@ -561,6 +562,7 @@ static void __init map_kernel_segment(pgd_t *pgd, void *va_start, void *va_end,
 	vma->flags	= VM_MAP;
 	vma->caller	= __builtin_return_address(0);
 
+
 	vm_area_add_early(vma);
 }
 
@@ -587,13 +589,13 @@ static void __init map_kernel_text_segment(pgd_t *pgd, void *va_start, void *va_
 }
 #endif
 
+
 #ifdef CONFIG_UNMAP_KERNEL_AT_EL0
 static int __init map_entry_trampoline(void)
 {
 	extern char __entry_tramp_text_start[];
-	/* 'DEBUG_RODATA' rodata is not enabled by default from SAMSUNG */
-	//pgprot_t prot = rodata_enabled ? PAGE_KERNEL_ROX : PAGE_KERNEL_EXEC;
-	pgprot_t prot = PAGE_KERNEL_EXEC;
+
+	pgprot_t prot = rodata_enabled ? PAGE_KERNEL_ROX : PAGE_KERNEL_EXEC;
 	phys_addr_t pa_start = __pa_symbol(__entry_tramp_text_start);
 
 	/* The trampoline is always mapped and can therefore be global */

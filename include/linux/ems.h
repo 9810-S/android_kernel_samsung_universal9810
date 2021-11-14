@@ -66,7 +66,6 @@ extern bool lbt_overutilized(int cpu, int level);
 extern void update_lbt_overutil(int cpu, unsigned long capacity);
 
 /* global boost */
-extern int global_boosted(void);
 extern void gb_qos_update_request(struct gb_qos_request *req, u32 new_value);
 
 /* task band */
@@ -104,7 +103,6 @@ extern int lb_need_active_balance(enum cpu_idle_type idle,
 extern bool energy_initialized;
 extern void set_energy_table_status(bool status);
 extern bool get_energy_table_status(void);
-extern bool is_slowest_cpu(int cpu);
 #else
 static inline struct sched_group *lb_fit_idlest_group(struct sched_domain *sd,
                struct task_struct *p) { return NULL; }
@@ -132,7 +130,6 @@ static inline bool lbt_overutilized(int cpu, int level)
 }
 static inline void update_lbt_overutil(int cpu, unsigned long capacity) { }
 
-static inline int global_boosted(void) { return 0; }
 static inline void gb_qos_update_request(struct gb_qos_request *req, u32 new_value) { }
 
 static inline void sync_band(struct task_struct *p, bool join) { }
@@ -176,10 +173,6 @@ static inline int lb_need_active_balance(enum cpu_idle_type idle,
 }
 static inline void set_energy_table_status(bool status) { }
 static inline bool get_energy_table_status(void)
-{
-	return false;
-}
-static inline bool is_slowest_cpu(int cpu)
 {
 	return false;
 }

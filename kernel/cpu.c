@@ -23,6 +23,7 @@
 #include <linux/lockdep.h>
 #include <linux/tick.h>
 #include <linux/irq.h>
+#include <linux/interrupt.h>
 #include <linux/smpboot.h>
 #include <linux/relay.h>
 #include <linux/slab.h>
@@ -1199,7 +1200,7 @@ int __ref _cpus_down(const struct cpumask *cpus, enum cpuhp_state target)
 			cpumask_set_cpu(cpu, &take_down_cpus);
 		} else {
 			/*
-			 * Hotplug out failed.
+			 * Hotplug out failed. 
 			 * CPU bring up has already been completed.
 			 * Skip next hotplug out step.
 			 */
@@ -1265,13 +1266,11 @@ static int do_cpu_down(unsigned int cpu, enum cpuhp_state target)
 	struct cpumask newmask;
 	int err;
 
-	preempt_disable();
 	cpumask_andnot(&newmask, cpu_online_mask, cpumask_of(cpu));
-	preempt_enable();
 
-	/* One big and LITTLE CPU must remain online */
-	if (!cpumask_intersects(&newmask, cpu_lp_mask) ||
-	    !cpumask_intersects(&newmask, cpu_perf_mask))
+	/* One big cluster CPU and one little cluster CPU must remain online */
+	if (!cpumask_intersects(&newmask, cpu_perf_mask) ||
+	    !cpumask_intersects(&newmask, cpu_lp_mask))
 		return -EINVAL;
 
 	cpu_maps_update_begin();
@@ -1728,7 +1727,7 @@ void enable_nonboot_cpus(void)
 		error = _cpu_up(cpu, 1, CPUHP_ONLINE);
 		trace_suspend_resume(TPS("CPU_ON"), cpu, false);
 		if (!error) {
-			pr_debug("CPU%d is up\n", cpu);
+			pr_info("CPU%d is up\n", cpu);
 			cpu_device = get_cpu_device(cpu);
 			if (!cpu_device)
 				pr_err("%s: failed to get cpu%d device\n",
@@ -1743,7 +1742,7 @@ void enable_nonboot_cpus(void)
 	arch_enable_nonboot_cpus_end();
 
 	cpumask_clear(frozen_cpus);
-	reaffine_perf_irqs(false);
+	reaffine_perf_irqs();
 out:
 	cpu_maps_update_done();
 }
@@ -2623,9 +2622,6 @@ EXPORT_SYMBOL(__cpu_present_mask);
 struct cpumask __cpu_active_mask __read_mostly;
 EXPORT_SYMBOL(__cpu_active_mask);
 
-struct cpumask __cpu_isolated_mask __read_mostly;
-EXPORT_SYMBOL(__cpu_isolated_mask);
-
 #if CONFIG_LITTLE_CPU_MASK
 static const unsigned long lp_cpu_bits = CONFIG_LITTLE_CPU_MASK;
 const struct cpumask *const cpu_lp_mask = to_cpumask(&lp_cpu_bits);
@@ -2655,11 +2651,6 @@ void init_cpu_possible(const struct cpumask *src)
 void init_cpu_online(const struct cpumask *src)
 {
 	cpumask_copy(&__cpu_online_mask, src);
-}
-
-void init_cpu_isolated(const struct cpumask *src)
-{
-	cpumask_copy(&__cpu_isolated_mask, src);
 }
 
 /*
